@@ -11,8 +11,10 @@
 // SSD1306 128x64 noname I2C setup
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
-// bitmap for battery icon
-static const unsigned char image_Battery_bits[] U8X8_PROGMEM = {0xfc,0x03,0x12,0x04,0x53,0x05,0x53,0x05,0x42,0x04,0xfc,0x03};
+// bitmaps for icons
+static const unsigned char image_BAT_percent_bits[] U8X8_PROGMEM = {0x0c,0x03,0x1e,0x03,0x33,0x03,0xb3,0x03,0xde,0x01,0xec,0x00,0x70,0x00,0x38,0x00,0xdc,0x00,0xee,0x01,0x37,0x03,0x33,0x03,0xe3,0x01,0xc3,0x00};
+static const unsigned char image_battery_charging_bits[] U8X8_PROGMEM = {0x00,0x40,0x00,0xf0,0x27,0x7f,0x08,0x30,0x80,0x08,0x10,0x80,0x0e,0x18,0x80,0x01,0x0c,0x80,0x01,0xfc,0x81,0x01,0xfe,0x80,0x01,0xc0,0x80,0x01,0x60,0x80,0x0e,0x20,0x80,0x08,0x30,0x80,0x08,0x10,0x80,0xf0,0xcb,0x7f,0x00,0x08,0x00,0x00,0x00,0x00};
+static const unsigned char image_CPU_bar_bits[] U8X8_PROGMEM = {0xfc,0xff,0xff,0xff,0x01,0x02,0x00,0x00,0x00,0x02,0x01,0x00,0x00,0x00,0x04,0x01,0x00,0x00,0x00,0x04,0x01,0x00,0x00,0x00,0x04,0x01,0x00,0x00,0x00,0x04,0x01,0x00,0x00,0x00,0x04,0x02,0x00,0x00,0x00,0x02,0xfc,0xff,0xff,0xff,0x01};
 
 // variables from mac
 int cpu_usage = 0;
@@ -25,45 +27,46 @@ bool is_plugged_in = false;
 void drawScreen_1(void) {
     u8g2.setFontMode(1);
     u8g2.setBitmapMode(1);
-    // string 1
-    u8g2.setFont(u8g2_font_4x6_tr);
-    u8g2.drawStr(4, 13, "CPU:");
-    // cpu bar
-    u8g2.drawFrame(23, 6, 77, 9);
-    // cpu usage fill
-    u8g2.drawBox(24, 7, cpu_usage * 75 / 100, 7);
-    // string 3
-    u8g2.drawStr(103, 13, "%");
-    // string 4
-    u8g2.drawStr(4, 35, "RAM Usage: ");
-    // used ram
+    // RAM title
+    u8g2.setFont(u8g2_font_t0_17b_tr);
+    u8g2.drawStr(51, 16, "RAM");
+    // RAM used
     char ram_used_str[10];
     sprintf(ram_used_str, "%.1f", used_memory);
-    u8g2.drawStr(48, 35, ram_used_str);
-    // string 6
-    u8g2.drawStr(64, 35, "/");
-    // total ram
+    u8g2.drawStr(46, 37, ram_used_str);
+    // RAM seperator
+    u8g2.drawStr(75, 37, "/");
+    // RAM total
     char ram_total_str[10];
     sprintf(ram_total_str, "%d", total_memory);
-    u8g2.drawStr(72, 35, ram_total_str);
-    // string 8
-    u8g2.drawStr(82, 35, "GB");
-    // string 9
-    u8g2.drawStr(4, 55, "Battery:");
-    // cpu usage percentage
-    char cpu_str[4];
-    sprintf(cpu_str, "%d", cpu_usage);
-    u8g2.drawStr(108, 13, cpu_str);
-    // battery percentage
-    char battery_str[4];
-    sprintf(battery_str, "%d", battery_charge);
-    u8g2.drawStr(38, 55, battery_str);
-    // string 12
-    u8g2.drawStr(51, 55, "%");
-    // plugged in status
+    u8g2.drawStr(46, 55, ram_total_str);
+    // RAM total gb
+    u8g2.drawStr(65, 55, "GB");
+    // BAT title
+    u8g2.setFont(u8g2_font_t0_17b_tr);
+    u8g2.drawStr(94, 16, "BAT");
+    // BAT charge
+    char battery_charge_str[10];
+    sprintf(battery_charge_str, "%d", battery_charge);
+    u8g2.drawStr(103, 38, battery_charge_str);
+    // BAT percent
+    u8g2.drawXBMP(91, 25, 10, 14, image_BAT_percent_bits);
+    // battery_charging
     if (is_plugged_in) {
-      u8g2.drawXBMP(60, 49, 11, 6, image_Battery_bits);
+      u8g2.drawXBMP(96, 45, 24, 16, image_battery_charging_bits);
     }
+    // CPU title
+    u8g2.drawStr(7, 16, "CPU");
+    // CPU load
+    char cpu_usage_str[10];
+    sprintf(cpu_usage_str, "%d", cpu_usage);
+    u8g2.drawStr(15, 38, cpu_usage_str);
+    // CPU percent
+    u8g2.drawXBMP(3, 25, 10, 14, image_BAT_percent_bits);
+    // CPU bar
+    u8g2.drawXBMP(4, 47, 35, 9, image_CPU_bar_bits);
+    // CPU bar filling
+    u8g2.drawBox(6, 49, cpu_usage * 31 / 100, 5);
 }
 
 void setup() {
