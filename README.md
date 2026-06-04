@@ -4,7 +4,7 @@ This project is a real-time hardware activity monitor that fetches system metric
 
 The UI was designed using **Lopaka** and implemented via `U8g2` library.
 
-![Demo PNG](monitor.png)
+![Demo GOF](demo.gif)
 
 ## Features
 
