@@ -3,52 +3,114 @@ import psutil
 import serial
 import serial.tools.list_ports
 
+
+BAUD_RATE = 115200
+
+
+def find_arduino():
+    """
+    Find a likely Arduino serial port.
+    """
+
+    ports = serial.tools.list_ports.comports()
+
+    for port in ports:
+        desc = (port.description or "").lower()
+        device = port.device
+
+        if (
+            "arduino" in desc
+            or "ch340" in desc
+            or "cp210" in desc
+            or "usb serial" in desc
+            or "usb-serial" in desc
+            or "cdc" in desc
+            or device.startswith("/dev/ttyACM")
+            or device.startswith("/dev/ttyUSB")
+        ):
+            return device
+
+    return None
+
+
+def connect():
+    while True:
+        port = find_arduino()
+
+        if port:
+            try:
+                ser = serial.Serial(port, BAUD_RATE, timeout=1)
+
+                # Allow Arduino to reboot after opening serial
+                time.sleep(2)
+
+                print(f"Connected to {port}")
+                return ser
+
+            except Exception as e:
+                print(f"Failed to open {port}: {e}")
+
+        print("Waiting for Arduino...")
+        time.sleep(2)
+
+
+def get_stats():
+    cpu = int(psutil.cpu_percent(interval=0.5))
+
+    mem = psutil.virtual_memory()
+    ram_used = round(mem.used / (1024 ** 3), 1)
+    ram_total = round(mem.total / (1024 ** 3))
+
+    uptime_seconds = int(time.time() - psutil.boot_time())
+
+    uptime_days = uptime_seconds // 86400
+    uptime_hours = (uptime_seconds % 86400) // 3600
+
+    return cpu, ram_used, ram_total, uptime_days, uptime_hours
+
+
+def build_packet():
+    cpu, ram_used, ram_total, days, hours = get_stats()
+
+    return (
+        f"CPU:{cpu}"
+        f"RAM_USED:{ram_used}"
+        f"RAM_TOTAL:{ram_total}"
+        f"UPTIME_D:{days}"
+        f"UPTIME_H:{hours}\n"
+    )
+
+
 def main():
-    port = find_esp32_port()
+    ser = connect()
 
-    if port:
-        print(f"ESP32 found on port: {port.device}")
-    else:
-        print("ESP32 not found. Please check the connection.")
-        exit(1)
+    while True:
+        try:
+            packet = build_packet()
 
-    ser = serial.Serial(port.device, 115200, timeout=1)
-    time.sleep(2) # Wait for the serial connection to initialize
+            ser.write(packet.encode("utf-8"))
 
-    try:
-        while True:
-            cpu_usage = psutil.cpu_percent(interval=1)
-            total_memory, used_memory = get_memory_info()
-            charge, plugged = get_battery_info()
-            data_string = f"CPU:{cpu_usage},RAM_USED:{used_memory},RAM_TOTAL:{total_memory},BATTERY:{charge},PLUGGED:{plugged}"
-            ser.write(data_string.encode('utf-8'))
-            print(f"Sent data: {data_string}")
+            print(packet.strip())
+
             time.sleep(1)
 
-    except KeyboardInterrupt:
-        print("Exiting...")
-        ser.close()
-        exit(0)
+        except (
+            serial.SerialException,
+            OSError,
+        ) as e:
+            print(f"Serial disconnected: {e}")
 
+            try:
+                ser.close()
+            except Exception:
+                pass
 
-def get_memory_info():
-    memory = psutil.virtual_memory()
-    total_memory = memory.total / 1024 ** 3 # Convert from bytes to GB
-    used_memory = (memory.used / 1024 ** 3).__round__(1) # Convert from bytes to GB
-    return total_memory, used_memory
+            ser = connect()
 
-def get_battery_info():
-    battery = psutil.sensors_battery()
-    charge = battery.percent
-    plugged = battery.power_plugged
-    return charge, plugged
-
-def find_esp32_port():
-    ports = serial.tools.list_ports.comports()
-    for port in ports:
-        if 'usbserial' in port.device:
-            return port
-    return None
+        except KeyboardInterrupt:
+            print("\nExiting...")
+            ser.close()
+            break
 
 
 if __name__ == "__main__":
