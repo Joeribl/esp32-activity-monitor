@@ -1,138 +1,165 @@
 #include <Arduino.h>
 #include <U8g2lib.h>
-
-#ifdef U8X8_HAVE_HW_SPI
-#include <SPI.h>
-#endif
-#ifdef U8X8_HAVE_HW_I2C
 #include <Wire.h>
-#endif
 
-// SH1107 128x128 OLED
 U8G2_SH1107_128X128_F_HW_I2C u8g2(
     U8G2_R0,
     U8X8_PIN_NONE
 );
 
-// ===== Stats =====
+// ================= DATA =================
 int cpu_usage = 0;
-float used_memory = 0.0f;
-int total_memory = 0;
+float ram_used = 0;
+int ram_total = 0;
 unsigned long uptime_days = 0;
 unsigned long uptime_hours = 0;
 
-// Serial buffer
+// smoothing
+float cpu_smooth = 0;
+float ram_smooth = 0;
+
+// CPU history graph
+#define GRAPH_W 80
+#define GRAPH_H 30
+uint8_t cpu_history[GRAPH_W];
+uint8_t history_index = 0;
+
+// serial buffer
 char serialBuffer[128];
 
-// Display state
+// state
 bool displayNeedsUpdate = true;
 unsigned long lastPacketTime = 0;
 
-// Burn-in protection
-int screenOffsetX = 0;
-int screenOffsetY = 0;
+// burn-in protection
+int offsetX = 0;
+int offsetY = 0;
 
-// Timeouts
+// timeouts
 const unsigned long STALE_TIMEOUT = 15UL * 60UL * 1000UL;
-const unsigned long OLED_SLEEP_TIMEOUT = 60UL * 60UL * 1000UL;
+const unsigned long SLEEP_TIMEOUT  = 60UL * 60UL * 1000UL;
 
 
-// ===== DRAW SCREEN (128x128 layout) =====
-void drawScreen()
-{
-    bool stale = (millis() - lastPacketTime) > STALE_TIMEOUT;
-
-    u8g2.setFontMode(1);
-    u8g2.setBitmapMode(1);
-
-    // ===== CPU =====
-    u8g2.setFont(u8g2_font_t0_17b_tr);
-    u8g2.drawStr(10 + screenOffsetX, 20 + screenOffsetY, "CPU");
-
-    char cpuStr[8];
-    snprintf(cpuStr, sizeof(cpuStr), "%d", cpu_usage);
-    u8g2.drawStr(10 + screenOffsetX, 45 + screenOffsetY, cpuStr);
-
-    u8g2.drawStr(40 + screenOffsetX, 45 + screenOffsetY, "%");
-
-    // bar
-    int barWidth = constrain(cpu_usage, 0, 100) * 60 / 100;
-    u8g2.drawFrame(10 + screenOffsetX, 55 + screenOffsetY, 60, 10);
-    u8g2.drawBox(10 + screenOffsetX, 55 + screenOffsetY, barWidth, 10);
-
-    // ===== RAM =====
-    u8g2.drawStr(10 + screenOffsetX, 85 + screenOffsetY, "RAM");
-
-    char ramStr[32];
-    snprintf(ramStr, sizeof(ramStr), "%.1f / %d GB", used_memory, total_memory);
-    u8g2.drawStr(10 + screenOffsetX, 105 + screenOffsetY, ramStr);
-
-    // ===== UPTIME =====
-    u8g2.drawStr(70 + screenOffsetX, 20 + screenOffsetY, "UP");
-
-    char up1[16];
-    char up2[16];
-
-    snprintf(up1, sizeof(up1), "%lud", uptime_days);
-    snprintf(up2, sizeof(up2), "%luh", uptime_hours);
-
-    u8g2.drawStr(70 + screenOffsetX, 45 + screenOffsetY, up1);
-    u8g2.drawStr(70 + screenOffsetX, 65 + screenOffsetY, up2);
-
-    // ===== STALE WARNING =====
-    if (stale)
-    {
-        u8g2.setFont(u8g2_font_6x10_tr);
-        u8g2.drawStr(70 + screenOffsetX, 120 + screenOffsetY, "STALE");
-    }
-}
-
-
-// ===== PARSER =====
+// ================= PARSER =================
 bool parseData(char *data)
 {
     int cpu;
-    float ramUsed;
-    int ramTotal;
-    unsigned long days;
-    unsigned long hours;
+    float ramU;
+    int ramT;
+    unsigned long d;
+    unsigned long h;
 
-    int parsed = sscanf(
+    int ok = sscanf(
         data,
         "CPU:%dRAM_USED:%fRAM_TOTAL:%dUPTIME_D:%luUPTIME_H:%lu",
-        &cpu,
-        &ramUsed,
-        &ramTotal,
-        &days,
-        &hours
+        &cpu, &ramU, &ramT, &d, &h
     );
 
-    if (parsed != 5)
-        return false;
+    if (ok != 5) return false;
 
-    cpu_usage = constrain(cpu, 0, 100);
-    used_memory = ramUsed;
-    total_memory = ramTotal;
-    uptime_days = days;
-    uptime_hours = hours;
+    cpu = constrain(cpu, 0, 100);
+
+    // smoothing
+    cpu_smooth = cpu_smooth * 0.7 + cpu * 0.3;
+    ram_smooth = ram_smooth * 0.7 + ramU * 0.3;
+
+    cpu_usage = cpu;
+    ram_used = ram_smooth;
+    ram_total = ramT;
+    uptime_days = d;
+    uptime_hours = h;
+
+    // update graph
+    cpu_history[history_index] = cpu;
+    history_index = (history_index + 1) % GRAPH_W;
 
     return true;
 }
 
 
-// ===== SETUP =====
+// ================= DRAW GRAPH =================
+void drawGraph(int x, int y)
+{
+    for (int i = 0; i < GRAPH_W; i++)
+    {
+        int idx = (history_index + i) % GRAPH_W;
+        int val = cpu_history[idx];
+
+        int h = (val * GRAPH_H) / 100;
+
+        u8g2.drawVLine(x + i, y + (GRAPH_H - h), h);
+    }
+}
+
+
+// ================= DRAW SCREEN =================
+void drawScreen()
+{
+    bool stale = (millis() - lastPacketTime) > STALE_TIMEOUT;
+
+    u8g2.setFont(u8g2_font_6x10_tr);
+
+    // ===== CPU =====
+    u8g2.drawStr(5 + offsetX, 12 + offsetY, "CPU");
+
+    char cpuStr[8];
+    snprintf(cpuStr, sizeof(cpuStr), "%d%%", cpu_usage);
+    u8g2.drawStr(5 + offsetX, 25 + offsetY, cpuStr);
+
+    u8g2.drawFrame(5 + offsetX, 30 + offsetY, 50, 6);
+    u8g2.drawBox(5 + offsetX, 30 + offsetY,
+                 cpu_usage / 2, 6);
+
+    // ===== RAM =====
+    u8g2.drawStr(5 + offsetX, 50 + offsetY, "RAM");
+
+    char ramStr[24];
+    snprintf(ramStr, sizeof(ramStr),
+             "%.1f / %d GB",
+             ram_used, ram_total);
+
+    u8g2.drawStr(5 + offsetX, 62 + offsetY, ramStr);
+
+    // ===== UPTIME =====
+    char upStr[32];
+    snprintf(upStr, sizeof(upStr),
+             "%lud %luh",
+             uptime_days,
+             uptime_hours);
+
+    u8g2.drawStr(70 + offsetX, 15 + offsetY, "UP");
+    u8g2.drawStr(70 + offsetX, 28 + offsetY, upStr);
+
+    // ===== GRAPH =====
+    drawGraph(10 + offsetX, 80 + offsetY);
+
+    // stale warning
+    if (stale)
+    {
+        u8g2.drawStr(80 + offsetX, 120 + offsetY, "STALE");
+    }
+}
+
+
+// ================= SETUP =================
 void setup()
 {
+    Wire.begin(8, 9);   // ESP32-C3 SuperMini
     Serial.begin(115200);
-    Serial.setTimeout(50);
+    delay(1000);
 
     u8g2.begin();
+    u8g2.setBusClock(400000);
+
+    // init graph
+    for (int i = 0; i < GRAPH_W; i++)
+        cpu_history[i] = 0;
 
     lastPacketTime = millis();
 }
 
 
-// ===== LOOP =====
+// ================= LOOP =================
 void loop()
 {
     if (Serial.available())
@@ -149,21 +176,28 @@ void loop()
         {
             lastPacketTime = millis();
 
-            // pixel shift
-            screenOffsetX = (screenOffsetX + 1) % 3;
-            screenOffsetY = (screenOffsetY + 1) % 3;
+            offsetX = (offsetX + 1) % 3;
+            offsetY = (offsetY + 1) % 3;
 
             displayNeedsUpdate = true;
         }
     }
 
-    // power save after 1 hour
-    if (millis() - lastPacketTime > OLED_SLEEP_TIMEOUT)
-        u8g2.setPowerSave(1);
-    else
-        u8g2.setPowerSave(0);
+    // power save
+    static bool sleep = false;
 
-    // redraw only on update
+    if (!sleep && millis() - lastPacketTime > SLEEP_TIMEOUT)
+    {
+        u8g2.setPowerSave(1);
+        sleep = true;
+    }
+
+    if (sleep && millis() - lastPacketTime <= SLEEP_TIMEOUT)
+    {
+        u8g2.setPowerSave(0);
+        sleep = false;
+    }
+
     if (displayNeedsUpdate)
     {
         u8g2.firstPage();
