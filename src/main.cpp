@@ -42,52 +42,153 @@ unsigned long uptime_hours = 0;
 // Serial buffer
 char serialBuffer[128];
 
+// Display state
+bool displayNeedsUpdate = true;
+
+// Last valid packet
+unsigned long lastPacketTime = 0;
+
+// Burn-in protection
+int screenOffsetX = 0;
+int screenOffsetY = 0;
+
+// Timeouts
+const unsigned long STALE_TIMEOUT =
+    15UL * 60UL * 1000UL;   // 15 min
+
+const unsigned long OLED_SLEEP_TIMEOUT =
+    60UL * 60UL * 1000UL;   // 1 hour
+
+
 void drawScreen()
 {
+    bool stale =
+        (millis() - lastPacketTime) >
+        STALE_TIMEOUT;
+
     u8g2.setFontMode(1);
     u8g2.setBitmapMode(1);
     u8g2.setFont(u8g2_font_t0_17b_tr);
 
     // CPU
-    u8g2.drawStr(7, 16, "CPU");
+    u8g2.drawStr(
+        7 + screenOffsetX,
+        16 + screenOffsetY,
+        "CPU");
 
     char cpuStr[8];
     snprintf(cpuStr, sizeof(cpuStr), "%d", cpu_usage);
-    u8g2.drawStr(15, 38, cpuStr);
 
-    u8g2.drawXBMP(3, 25, 10, 14, image_BAT_percent_bits);
+    u8g2.drawStr(
+        15 + screenOffsetX,
+        38 + screenOffsetY,
+        cpuStr);
 
-    u8g2.drawXBMP(4, 47, 35, 9, image_CPU_bar_bits);
+    u8g2.drawXBMP(
+        3 + screenOffsetX,
+        25 + screenOffsetY,
+        10,
+        14,
+        image_BAT_percent_bits);
 
-    int barWidth = cpu_usage * 31 / 100;
-    u8g2.drawBox(6, 49, barWidth, 5);
+    u8g2.drawXBMP(
+        4 + screenOffsetX,
+        47 + screenOffsetY,
+        35,
+        9,
+        image_CPU_bar_bits);
+
+    int barWidth =
+        constrain(cpu_usage, 0, 100) * 31 / 100;
+
+    u8g2.drawBox(
+        6 + screenOffsetX,
+        49 + screenOffsetY,
+        barWidth,
+        5);
 
     // RAM
-    u8g2.drawStr(51, 16, "RAM");
+    u8g2.drawStr(
+        51 + screenOffsetX,
+        16 + screenOffsetY,
+        "RAM");
 
     char ramUsedStr[16];
-    snprintf(ramUsedStr, sizeof(ramUsedStr), "%.1f", used_memory);
-    u8g2.drawStr(46, 37, ramUsedStr);
+    snprintf(
+        ramUsedStr,
+        sizeof(ramUsedStr),
+        "%.1f",
+        used_memory);
 
-    u8g2.drawStr(75, 37, "/");
+    u8g2.drawStr(
+        46 + screenOffsetX,
+        37 + screenOffsetY,
+        ramUsedStr);
+
+    u8g2.drawStr(
+        75 + screenOffsetX,
+        37 + screenOffsetY,
+        "/");
 
     char ramTotalStr[16];
-    snprintf(ramTotalStr, sizeof(ramTotalStr), "%d", total_memory);
-    u8g2.drawStr(46, 55, ramTotalStr);
+    snprintf(
+        ramTotalStr,
+        sizeof(ramTotalStr),
+        "%d",
+        total_memory);
 
-    u8g2.drawStr(65, 55, "GB");
+    u8g2.drawStr(
+        46 + screenOffsetX,
+        55 + screenOffsetY,
+        ramTotalStr);
+
+    u8g2.drawStr(
+        65 + screenOffsetX,
+        55 + screenOffsetY,
+        "GB");
 
     // Uptime
-    u8g2.drawStr(88, 16, "UP");
+    u8g2.drawStr(
+        88 + screenOffsetX,
+        16 + screenOffsetY,
+        "UP");
 
     char daysStr[12];
-    snprintf(daysStr, sizeof(daysStr), "%luD", uptime_days);
-    u8g2.drawStr(90, 35, daysStr);
+    snprintf(
+        daysStr,
+        sizeof(daysStr),
+        "%luD",
+        uptime_days);
+
+    u8g2.drawStr(
+        90 + screenOffsetX,
+        35 + screenOffsetY,
+        daysStr);
 
     char hoursStr[12];
-    snprintf(hoursStr, sizeof(hoursStr), "%luH", uptime_hours);
-    u8g2.drawStr(90, 55, hoursStr);
+    snprintf(
+        hoursStr,
+        sizeof(hoursStr),
+        "%luH",
+        uptime_hours);
+
+    u8g2.drawStr(
+        90 + screenOffsetX,
+        55 + screenOffsetY,
+        hoursStr);
+
+    // Stale indicator
+    if (stale)
+    {
+        u8g2.setFont(u8g2_font_5x8_tr);
+
+        u8g2.drawStr(
+            85 + screenOffsetX,
+            63 + screenOffsetY,
+            "STALE");
+    }
 }
+
 
 bool parseData(char *data)
 {
@@ -120,16 +221,28 @@ bool parseData(char *data)
     return true;
 }
 
+
 void setup()
 {
     Serial.begin(115200);
-    Serial.setTimeout(20);
+    Serial.setTimeout(50);
 
     u8g2.begin();
+
+    lastPacketTime = millis();
+
+    u8g2.firstPage();
+    do
+    {
+        drawScreen();
+    }
+    while (u8g2.nextPage());
 }
+
 
 void loop()
 {
+    // Handle serial input
     if (Serial.available())
     {
         size_t len = Serial.readBytesUntil(
@@ -139,15 +252,44 @@ void loop()
 
         serialBuffer[len] = '\0';
 
-        parseData(serialBuffer);
+        if (parseData(serialBuffer))
+        {
+            lastPacketTime = millis();
+
+            // Move display slightly on every update
+            screenOffsetX =
+                (screenOffsetX + 1) % 3;
+
+            screenOffsetY =
+                (screenOffsetY + 1) % 3;
+
+            displayNeedsUpdate = true;
+        }
     }
 
-    u8g2.firstPage();
-    do
+    // OLED power save after 1 hour
+    if ((millis() - lastPacketTime) >
+        OLED_SLEEP_TIMEOUT)
     {
-        drawScreen();
+        u8g2.setPowerSave(1);
     }
-    while (u8g2.nextPage());
+    else
+    {
+        u8g2.setPowerSave(0);
+    }
 
-    delay(50);
+    // Redraw only when needed
+    if (displayNeedsUpdate)
+    {
+        u8g2.firstPage();
+        do
+        {
+            drawScreen();
+        }
+        while (u8g2.nextPage());
+
+        displayNeedsUpdate = false;
+    }
+
+    delay(100);
 }
